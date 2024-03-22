@@ -51,11 +51,6 @@ func NewBlockValidator(config *params.ChainConfig, blockchain *BlockChain, engin
 // header's transaction and uncle roots. The headers are assumed to be already
 // validated at this point.
 func (v *BlockValidator) ValidateBody(block *types.Block) error {
-	// Check whether the block is already imported.
-	if v.bc.HasBlockAndState(block.Hash(), block.NumberU64()) {
-		return ErrKnownBlock
-	}
-
 	// Header validity is known at this point. Here we verify that uncles, transactions
 	// and withdrawals given in the block body match the header.
 	header := block.Header()
