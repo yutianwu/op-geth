@@ -17,12 +17,9 @@
 package trie
 
 import (
-	"fmt"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/trie/trienode"
 )
 
@@ -33,7 +30,11 @@ func NewEmptyTrie() *EmptyTrie {
 	return &EmptyTrie{}
 }
 
-func (t *EmptyTrie) GetStorage(addr common.Address, key []byte) ([]byte, error) {
+func (t *EmptyTrie) GetKey(shaKey []byte) []byte {
+	return nil
+}
+
+func (t *EmptyTrie) GetStorage(_ common.Address, key []byte) ([]byte, error) {
 	return nil, nil
 }
 
@@ -41,19 +42,20 @@ func (t *EmptyTrie) GetAccount(address common.Address) (*types.StateAccount, err
 	return nil, nil
 }
 
-func (t *EmptyTrie) UpdateStorage(addr common.Address, key, value []byte) error {
+func (t *EmptyTrie) UpdateStorage(_ common.Address, key, value []byte) error {
 	return nil
 }
 
+// TryUpdateAccount abstract an account write in the trie.
 func (t *EmptyTrie) UpdateAccount(address common.Address, account *types.StateAccount) error {
 	return nil
 }
 
-func (t *EmptyTrie) UpdateContractCode(address common.Address, codeHash common.Hash, code []byte) error {
+func (t *EmptyTrie) UpdateContractCode(_ common.Address, _ common.Hash, _ []byte) error {
 	return nil
 }
 
-func (t *EmptyTrie) DeleteStorage(addr common.Address, key []byte) error {
+func (t *EmptyTrie) DeleteStorage(_ common.Address, key []byte) error {
 	return nil
 }
 
@@ -65,6 +67,12 @@ func (t *EmptyTrie) Commit(collectLeaf bool) (common.Hash, *trienode.NodeSet, er
 	return common.Hash{}, nil, nil
 }
 
+func (t *EmptyTrie) Hash() common.Hash {
+	return common.Hash{}
+}
+
+// NodeIterator returns an iterator that returns nodes of the underlying trie. Iteration
+// starts at the key after the given start key.
 func (t *EmptyTrie) NodeIterator(startKey []byte) (NodeIterator, error) {
 	return nil, nil
 }
@@ -73,49 +81,8 @@ func (t *EmptyTrie) Prove(key []byte, proofDb ethdb.KeyValueWriter) error {
 	return nil
 }
 
-func (t *EmptyTrie) Get(key []byte) []byte {
-	return nil
-}
-
-func (t *EmptyTrie) TryGet(key []byte) ([]byte, error) {
-	return nil, nil
-}
-
-func (t *EmptyTrie) TryGetNode(path []byte) ([]byte, int, error) {
-	return nil, 0, nil
-}
-func (t *EmptyTrie) Update(key, value []byte) {}
-
-func (t *EmptyTrie) TryUpdate(key, value []byte) error {
-	return nil
-}
-
-// Delete removes any existing value for key from the trie.
-func (t *EmptyTrie) Delete(key []byte) {
-	if err := t.TryDelete(key); err != nil {
-		log.Error(fmt.Sprintf("Unhandled trie error: %v", err))
-	}
-}
-
-func (t *EmptyTrie) TryDelete(key []byte) error {
-	return nil
-}
-
-func (t *EmptyTrie) GetKey(shaKey []byte) []byte {
-	return nil
-}
-
-func (t *EmptyTrie) Hash() common.Hash {
-	return common.Hash{}
-}
-
 // Copy returns a copy of SecureTrie.
 func (t *EmptyTrie) Copy() *EmptyTrie {
-	cpy := *t
-	return &cpy
-}
-
-func (t *EmptyTrie) ResetCopy() *EmptyTrie {
 	cpy := *t
 	return &cpy
 }
