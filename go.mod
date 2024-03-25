@@ -1,6 +1,8 @@
 module github.com/ethereum/go-ethereum
 
-go 1.20
+go 1.21
+
+toolchain go1.22.1
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.2.0
@@ -180,5 +182,7 @@ require (
 )
 
 replace github.com/cometbft/cometbft => github.com/bnb-chain/greenfield-cometbft v1.0.0
+
+replace github.com/wercker/journalhook => github.com/wercker/journalhook v0.0.0-20230927020745-64542ffa4117
 
 //replace github.com/ethereum-optimism/superchain-registry/superchain => ../superchain-registry/superchain
