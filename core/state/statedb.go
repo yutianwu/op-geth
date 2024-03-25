@@ -71,7 +71,7 @@ type StateDB struct {
 	// It will be updated when the Commit is called.
 	originalRoot common.Hash
 	expectedRoot common.Hash // The state root in the block header
-
+	stateRoot    common.Hash
 	// These maps hold the state changes (including the corresponding
 	// original value) that occurred in this **block**.
 	accounts       map[common.Hash][]byte                    // The mutated accounts in 'slim RLP' encoding
@@ -927,19 +927,21 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 			s.trie = trie
 		}
 	}
-	usedAddrs := make([][]byte, 0, len(s.stateObjectsPending))
-	for addr := range s.stateObjectsPending {
-		if obj := s.stateObjects[addr]; obj.deleted {
-			s.deleteStateObject(obj)
-			s.AccountDeleted += 1
-		} else {
-			s.updateStateObject(obj)
-			s.AccountUpdated += 1
+	if !s.noTrie {
+		usedAddrs := make([][]byte, 0, len(s.stateObjectsPending))
+		for addr := range s.stateObjectsPending {
+			if obj := s.stateObjects[addr]; obj.deleted {
+				s.deleteStateObject(obj)
+				s.AccountDeleted += 1
+			} else {
+				s.updateStateObject(obj)
+				s.AccountUpdated += 1
+			}
+			usedAddrs = append(usedAddrs, common.CopyBytes(addr[:])) // Copy needed for closure
 		}
-		usedAddrs = append(usedAddrs, common.CopyBytes(addr[:])) // Copy needed for closure
-	}
-	if prefetcher != nil {
-		prefetcher.used(common.Hash{}, s.originalRoot, usedAddrs)
+		if prefetcher != nil {
+			prefetcher.used(common.Hash{}, s.originalRoot, usedAddrs)
+		}
 	}
 	if len(s.stateObjectsPending) > 0 {
 		s.stateObjectsPending = make(map[common.Address]struct{})
@@ -948,6 +950,7 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	if metrics.EnabledExpensive {
 		defer func(start time.Time) { s.AccountHashes += time.Since(start) }(time.Now())
 	}
+
 	if s.noTrie {
 		return s.expectedRoot
 	} else {
@@ -1186,12 +1189,14 @@ func (s *StateDB) handleDestruction(nodes *trienode.MergedNodeSet) (map[common.A
 // The associated block number of the state transition is also provided
 // for more chain context.
 func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, error) {
+	log.Info("start to commit block", "block", block, "notries", s.noTrie)
+
 	// Short circuit in case any database failure occurred earlier.
 	if s.dbErr != nil {
 		return common.Hash{}, fmt.Errorf("commit aborted due to earlier error: %v", s.dbErr)
 	}
 	// Finalize any pending changes and merge everything into the tries
-	s.IntermediateRoot(deleteEmptyObjects)
+	s.stateRoot = s.IntermediateRoot(deleteEmptyObjects)
 
 	// Commit objects to the trie, measuring the elapsed time
 	var (
@@ -1297,15 +1302,17 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 		}
 		s.snap = nil
 	}
-	root := s.expectedRoot
+	root := s.stateRoot
+	log.Info("commit block", "block", block, "stateRoot", root.String(), "expectedRoot", s.expectedRoot.String())
 	if root == (common.Hash{}) {
 		root = types.EmptyRootHash
 	}
-	origin := s.originalRoot
-	if origin == (common.Hash{}) {
-		origin = types.EmptyRootHash
-	}
+
 	if !s.noTrie {
+		origin := s.originalRoot
+		if origin == (common.Hash{}) {
+			origin = types.EmptyRootHash
+		}
 		if root != origin {
 			start := time.Now()
 			set := triestate.New(s.accountsOrigin, s.storagesOrigin, incomplete)
