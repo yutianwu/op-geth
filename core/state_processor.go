@@ -17,7 +17,6 @@
 package core
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -29,7 +28,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -99,14 +97,6 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}
-		log.Info("process tx", "txhash", tx.Hash().String())
-		for _, rlog := range receipt.Logs {
-			for _, topic := range rlog.Topics {
-				log.Info(topic.String())
-			}
-			log.Info(hex.EncodeToString(rlog.Data))
-		}
-		log.Info("process tx", "txhash", tx.Hash().String(), "gasUsed", receipt.GasUsed, "cumulativeGasUsed", receipt.CumulativeGasUsed)
 
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)

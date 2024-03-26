@@ -511,22 +511,21 @@ func (s *StateDB) GetTransientState(addr common.Address, key common.Hash) common
 
 // updateStateObject writes the given object to the trie.
 func (s *StateDB) updateStateObject(obj *stateObject) {
-	if s.noTrie {
-		return
+	if !s.noTrie {
+		// Track the amount of time wasted on updating the account from the trie
+		if metrics.EnabledExpensive {
+			defer func(start time.Time) { s.AccountUpdates += time.Since(start) }(time.Now())
+		}
+		// Encode the account and update the account trie
+		addr := obj.Address()
+		if err := s.trie.UpdateAccount(addr, &obj.data); err != nil {
+			s.setError(fmt.Errorf("updateStateObject (%x) error: %v", addr[:], err))
+		}
+		if obj.dirtyCode {
+			s.trie.UpdateContractCode(obj.Address(), common.BytesToHash(obj.CodeHash()), obj.code)
+		}
 	}
 
-	// Track the amount of time wasted on updating the account from the trie
-	if metrics.EnabledExpensive {
-		defer func(start time.Time) { s.AccountUpdates += time.Since(start) }(time.Now())
-	}
-	// Encode the account and update the account trie
-	addr := obj.Address()
-	if err := s.trie.UpdateAccount(addr, &obj.data); err != nil {
-		s.setError(fmt.Errorf("updateStateObject (%x) error: %v", addr[:], err))
-	}
-	if obj.dirtyCode {
-		s.trie.UpdateContractCode(obj.Address(), common.BytesToHash(obj.CodeHash()), obj.code)
-	}
 	// Cache the data until commit. Note, this update mechanism is not symmetric
 	// to the deletion, because whereas it is enough to track account updates
 	// at commit time, deletions need tracking at transaction boundary level to
@@ -927,22 +926,22 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 			s.trie = trie
 		}
 	}
-	if !s.noTrie {
-		usedAddrs := make([][]byte, 0, len(s.stateObjectsPending))
-		for addr := range s.stateObjectsPending {
-			if obj := s.stateObjects[addr]; obj.deleted {
-				s.deleteStateObject(obj)
-				s.AccountDeleted += 1
-			} else {
-				s.updateStateObject(obj)
-				s.AccountUpdated += 1
-			}
-			usedAddrs = append(usedAddrs, common.CopyBytes(addr[:])) // Copy needed for closure
+
+	usedAddrs := make([][]byte, 0, len(s.stateObjectsPending))
+	for addr := range s.stateObjectsPending {
+		if obj := s.stateObjects[addr]; obj.deleted {
+			s.deleteStateObject(obj)
+			s.AccountDeleted += 1
+		} else {
+			s.updateStateObject(obj)
+			s.AccountUpdated += 1
 		}
-		if prefetcher != nil {
-			prefetcher.used(common.Hash{}, s.originalRoot, usedAddrs)
-		}
+		usedAddrs = append(usedAddrs, common.CopyBytes(addr[:])) // Copy needed for closure
 	}
+	if prefetcher != nil {
+		prefetcher.used(common.Hash{}, s.originalRoot, usedAddrs)
+	}
+
 	if len(s.stateObjectsPending) > 0 {
 		s.stateObjectsPending = make(map[common.Address]struct{})
 	}
@@ -1189,8 +1188,6 @@ func (s *StateDB) handleDestruction(nodes *trienode.MergedNodeSet) (map[common.A
 // The associated block number of the state transition is also provided
 // for more chain context.
 func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, error) {
-	log.Info("start to commit block", "block", block, "notries", s.noTrie)
-
 	// Short circuit in case any database failure occurred earlier.
 	if s.dbErr != nil {
 		return common.Hash{}, fmt.Errorf("commit aborted due to earlier error: %v", s.dbErr)
@@ -1302,8 +1299,8 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 		}
 		s.snap = nil
 	}
+
 	root := s.stateRoot
-	log.Info("commit block", "block", block, "stateRoot", root.String(), "expectedRoot", s.expectedRoot.String())
 	if root == (common.Hash{}) {
 		root = types.EmptyRootHash
 	}
