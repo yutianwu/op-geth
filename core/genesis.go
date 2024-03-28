@@ -155,7 +155,8 @@ func (ga *GenesisAlloc) hash() (common.Hash, error) {
 			statedb.SetState(addr, key, value)
 		}
 	}
-	return statedb.Commit(0, false)
+	hash, _, err := statedb.Commit(0, false)
+	return hash, err
 }
 
 // flush is very similar with hash, but the main difference is all the generated
@@ -181,7 +182,7 @@ func (ga *GenesisAlloc) flush(db ethdb.Database, triedb *trie.Database, blockhas
 			statedb.SetState(addr, key, value)
 		}
 	}
-	root, err := statedb.Commit(0, false)
+	root, _, err := statedb.Commit(0, false)
 	if err != nil {
 		return err
 	}

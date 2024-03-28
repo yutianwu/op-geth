@@ -22,11 +22,16 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/crypto/sha3"
+	"golang.org/x/exp/slices"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
@@ -50,7 +55,6 @@ import (
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/triedb/hashdb"
 	"github.com/ethereum/go-ethereum/trie/triedb/pathdb"
-	"golang.org/x/exp/slices"
 )
 
 var (
@@ -240,6 +244,9 @@ type BlockChain struct {
 	scope         event.SubscriptionScope
 	genesisBlock  *types.Block
 
+	diffQueueBuffer chan *types.DiffLayer
+	diffFile        *os.File
+
 	// This mutex synchronizes chain write operations.
 	// Readers don't need to take it, they can just read the database.
 	chainmu *syncx.ClosableMutex
@@ -323,7 +330,15 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 		futureBlocks:        lru.NewCache[common.Hash, *types.Block](maxFutureBlocks),
 		engine:              engine,
 		vmConfig:            vmConfig,
+		diffQueueBuffer:     make(chan *types.DiffLayer, 10000),
 	}
+
+	file, err := os.OpenFile("diffHash.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, err
+	}
+	bc.diffFile = file
+
 	bc.flushInterval.Store(int64(cacheConfig.TrieTimeLimit))
 	bc.forker = NewForkChoice(bc, shouldPreserve)
 	bc.stateCache = state.NewDatabaseWithNodeDB(bc.db, bc.triedb)
@@ -331,7 +346,6 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 	bc.prefetcher = newStatePrefetcher(chainConfig, bc, engine)
 	bc.processor = NewStateProcessor(chainConfig, bc, engine)
 
-	var err error
 	bc.hc, err = NewHeaderChain(db, chainConfig, engine, bc.insertStopped)
 	if err != nil {
 		return nil, err
@@ -499,6 +513,9 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 		bc.wg.Add(1)
 		go bc.maintainTxIndex()
 	}
+
+	go bc.storeDiff()
+
 	return bc, nil
 }
 
@@ -1012,6 +1029,8 @@ func (bc *BlockChain) stopWithoutSaving() {
 // Stop stops the blockchain service. If any imports are currently in progress
 // it will abort them using the procInterrupt.
 func (bc *BlockChain) Stop() {
+	bc.diffFile.Close()
+
 	bc.stopWithoutSaving()
 
 	// Ensure that the entirety of the state snapshot is journaled to disk.
@@ -1454,9 +1473,16 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		log.Crit("Failed to write block into disk", "err", err)
 	}
 	// Commit all cached state changes into underlying memory database.
-	root, err := state.Commit(block.NumberU64(), bc.chainConfig.IsEIP158(block.Number()))
+	root, diffLayer, err := state.Commit(block.NumberU64(), bc.chainConfig.IsEIP158(block.Number()))
 	if err != nil {
 		return err
+	}
+	if diffLayer != nil && block.Header().TxHash != types.EmptyRootHash {
+		// Filling necessary field
+		diffLayer.Receipts = receipts
+		diffLayer.BlockHash = block.Hash()
+		diffLayer.Number = block.NumberU64()
+		bc.diffQueueBuffer <- diffLayer
 	}
 	// If node is running in path mode, skip explicit gc operation
 	// which is unnecessary in this mode.
@@ -1516,6 +1542,77 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		bc.triedb.Dereference(root)
 	}
 	return nil
+}
+
+func CalculateDiffHash(d *types.DiffLayer) (common.Hash, error) {
+	if d == nil {
+		return common.Hash{}, errors.New("nil diff layer")
+	}
+
+	diff := &types.ExtDiffLayer{
+		BlockHash: d.BlockHash,
+		Receipts:  make([]*types.ReceiptForStorage, 0),
+		Number:    d.Number,
+		Codes:     d.Codes,
+		Destructs: d.Destructs,
+		Accounts:  d.Accounts,
+		Storages:  d.Storages,
+	}
+
+	for index, account := range diff.Accounts {
+		full, err := types.FullAccount(account.Blob)
+		if err != nil {
+			return common.Hash{}, fmt.Errorf("decode full account error: %v", err)
+		}
+		// set account root to empty root
+		full.Root = types.EmptyRootHash
+		diff.Accounts[index].Blob = types.SlimAccountRLP(*full)
+	}
+
+	rawData, err := rlp.EncodeToBytes(diff)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("encode new diff error: %v", err)
+	}
+
+	hasher := sha3.NewLegacyKeccak256()
+	_, err = hasher.Write(rawData)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("hasher write error: %v", err)
+	}
+
+	var hash common.Hash
+	hasher.Sum(hash[:0])
+	return hash, nil
+}
+
+func (bc *BlockChain) storeDiff() {
+	for {
+		select {
+		case diffLayer := <-bc.diffQueueBuffer:
+			sort.SliceStable(diffLayer.Codes, func(i, j int) bool {
+				return diffLayer.Codes[i].Hash.Hex() < diffLayer.Codes[j].Hash.Hex()
+			})
+			sort.SliceStable(diffLayer.Destructs, func(i, j int) bool {
+				return diffLayer.Destructs[i].Hex() < (diffLayer.Destructs[j].Hex())
+			})
+			sort.SliceStable(diffLayer.Accounts, func(i, j int) bool {
+				return diffLayer.Accounts[i].Account.Hex() < diffLayer.Accounts[j].Account.Hex()
+			})
+			sort.SliceStable(diffLayer.Storages, func(i, j int) bool {
+				return diffLayer.Storages[i].Account.Hex() < diffLayer.Storages[j].Account.Hex()
+			})
+			for index := range diffLayer.Storages {
+				// Sort keys and vals by key.
+				sort.Sort(&diffLayer.Storages[index])
+			}
+
+			hash, err := CalculateDiffHash(diffLayer)
+			if err != nil {
+				panic("calculate diff hash error: " + err.Error())
+			}
+			bc.diffFile.WriteString(fmt.Sprintf("%d %s\n", diffLayer.Number, hash.String()))
+		}
+	}
 }
 
 // WriteBlockAndSetHead writes the given block and all associated state to the database,
