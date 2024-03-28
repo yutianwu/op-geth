@@ -1162,10 +1162,10 @@ func (s *StateDB) handleDestruction(nodes *trienode.MergedNodeSet) (map[common.A
 //
 // The associated block number of the state transition is also provided
 // for more chain context.
-func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, error) {
+func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, *types.DiffLayer, error) {
 	// Short circuit in case any database failure occurred earlier.
 	if s.dbErr != nil {
-		return common.Hash{}, fmt.Errorf("commit aborted due to earlier error: %v", s.dbErr)
+		return common.Hash{}, nil, fmt.Errorf("commit aborted due to earlier error: %v", s.dbErr)
 	}
 	// Finalize any pending changes and merge everything into the tries
 	s.IntermediateRoot(deleteEmptyObjects)
@@ -1178,11 +1178,14 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 		storageTrieNodesDeleted int
 		nodes                   = trienode.NewMergedNodeSet()
 		codeWriter              = s.db.DiskDB().NewBatch()
+		diffLayer               *types.DiffLayer
 	)
+	diffLayer = &types.DiffLayer{}
+
 	// Handle all state deletions first
 	incomplete, err := s.handleDestruction(nodes)
 	if err != nil {
-		return common.Hash{}, err
+		return common.Hash{}, nil, err
 	}
 	// Handle all state updates afterwards
 	for addr := range s.stateObjectsDirty {
@@ -1193,19 +1196,25 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 		// Write any contract code associated with the state object
 		if obj.code != nil && obj.dirtyCode {
 			rawdb.WriteCode(codeWriter, common.BytesToHash(obj.CodeHash()), obj.code)
+			if s.snap != nil {
+				diffLayer.Codes = append(diffLayer.Codes, types.DiffCode{
+					Hash: common.BytesToHash(obj.CodeHash()),
+					Code: obj.code,
+				})
+			}
 			obj.dirtyCode = false
 		}
 		// Write any storage changes in the state object to its storage trie
 		set, err := obj.commit()
 		if err != nil {
-			return common.Hash{}, err
+			return common.Hash{}, nil, err
 		}
 		// Merge the dirty nodes of storage trie into global set. It is possible
 		// that the account was destructed and then resurrected in the same block.
 		// In this case, the node set is shared by both accounts.
 		if set != nil {
 			if err := nodes.Merge(set); err != nil {
-				return common.Hash{}, err
+				return common.Hash{}, nil, err
 			}
 			updates, deleted := set.Size()
 			storageTrieNodesUpdated += updates
@@ -1224,12 +1233,12 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 	}
 	root, set, err := s.trie.Commit(true)
 	if err != nil {
-		return common.Hash{}, err
+		return common.Hash{}, nil, err
 	}
 	// Merge the dirty nodes of account trie into global set
 	if set != nil {
 		if err := nodes.Merge(set); err != nil {
-			return common.Hash{}, err
+			return common.Hash{}, nil, err
 		}
 		accountTrieNodesUpdated, accountTrieNodesDeleted = set.Size()
 	}
@@ -1250,6 +1259,7 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 	// If snapshotting is enabled, update the snapshot tree with this new version
 	if s.snap != nil {
 		start := time.Now()
+		diffLayer.Destructs, diffLayer.Accounts, diffLayer.Storages = s.SnapToDiffLayer()
 		// Only update if there's a state transition (skip empty Clique blocks)
 		if parent := s.snap.Root(); parent != root {
 			if err := s.snaps.Update(root, parent, s.convertAccountSet(s.stateObjectsDestruct), s.accounts, s.storages); err != nil {
@@ -1279,7 +1289,7 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 		start := time.Now()
 		set := triestate.New(s.accountsOrigin, s.storagesOrigin, incomplete)
 		if err := s.db.TrieDB().Update(root, origin, block, nodes, set); err != nil {
-			return common.Hash{}, err
+			return common.Hash{}, nil, err
 		}
 		s.originalRoot = root
 		if metrics.EnabledExpensive {
@@ -1296,7 +1306,7 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 	s.storagesOrigin = make(map[common.Address]map[common.Hash][]byte)
 	s.stateObjectsDirty = make(map[common.Address]struct{})
 	s.stateObjectsDestruct = make(map[common.Address]*types.StateAccount)
-	return root, nil
+	return root, diffLayer, nil
 }
 
 // Prepare handles the preparatory steps for executing a state transition with.
@@ -1408,4 +1418,33 @@ func copy2DSet[k comparable](set map[k]map[common.Hash][]byte) map[k]map[common.
 		}
 	}
 	return copied
+}
+
+func (s *StateDB) SnapToDiffLayer() ([]common.Address, []types.DiffAccount, []types.DiffStorage) {
+	destructs := make([]common.Address, 0, len(s.stateObjectsDestruct))
+	for account := range s.stateObjectsDestruct {
+		destructs = append(destructs, account)
+	}
+	accounts := make([]types.DiffAccount, 0, len(s.accounts))
+	for accountHash, account := range s.accounts {
+		accounts = append(accounts, types.DiffAccount{
+			Account: accountHash,
+			Blob:    account,
+		})
+	}
+	storages := make([]types.DiffStorage, 0, len(s.storages))
+	for accountHash, storage := range s.storages {
+		keys := make([]common.Hash, 0, len(storage))
+		values := make([][]byte, 0, len(storage))
+		for k, v := range storage {
+			keys = append(keys, k)
+			values = append(values, v)
+		}
+		storages = append(storages, types.DiffStorage{
+			Account: accountHash,
+			Keys:    keys,
+			Vals:    values,
+		})
+	}
+	return destructs, accounts, storages
 }
