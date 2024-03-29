@@ -333,7 +333,13 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 		diffQueueBuffer:     make(chan *types.DiffLayer, 10000),
 	}
 
-	file, err := os.OpenFile("diffHash.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	diffFile := "diffHash.txt"
+	if val, ok := os.LookupEnv("DIFF_HASH_FILE"); ok {
+		if val != "" {
+			diffFile = val
+		}
+	}
+	file, err := os.OpenFile(diffFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return nil, err
 	}
