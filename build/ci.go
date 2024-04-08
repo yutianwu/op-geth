@@ -323,7 +323,7 @@ func doTest(cmdline []string) {
 		gotest.Args = append(gotest.Args, "-race")
 	}
 
-	packages := []string{"./tests/..."}
+	packages := []string{"./..."}
 	if len(flag.CommandLine.Args()) > 0 {
 		packages = flag.CommandLine.Args()
 	}
