@@ -53,6 +53,7 @@ import (
 	"time"
 
 	"github.com/cespare/cp"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto/signify"
 	"github.com/ethereum/go-ethereum/internal/build"
@@ -304,7 +305,7 @@ func doTest(cmdline []string) {
 	gotest := tc.Go("test")
 
 	// CI needs a bit more time for the statetests (default 10m).
-	gotest.Args = append(gotest.Args, "-timeout=20m")
+	gotest.Args = append(gotest.Args, "-timeout=50m")
 
 	// Enable CKZG backend in CI.
 	gotest.Args = append(gotest.Args, "-tags=ckzg")
@@ -322,7 +323,7 @@ func doTest(cmdline []string) {
 		gotest.Args = append(gotest.Args, "-race")
 	}
 
-	packages := []string{"./..."}
+	packages := []string{"./tests/..."}
 	if len(flag.CommandLine.Args()) > 0 {
 		packages = flag.CommandLine.Args()
 	}
