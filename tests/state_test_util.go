@@ -25,6 +25,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/crypto/sha3"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/common/math"
@@ -41,7 +43,6 @@ import (
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/triedb/hashdb"
 	"github.com/ethereum/go-ethereum/trie/triedb/pathdb"
-	"golang.org/x/crypto/sha3"
 )
 
 // StateTest checks transaction processing without block context.
@@ -298,7 +299,10 @@ func (t *StateTest) RunNoVerify(subtest StateSubtest, vmconfig vm.Config, snapsh
 	statedb.AddBalance(block.Coinbase(), new(big.Int))
 
 	// Commit state mutations into database.
-	root, _ := statedb.Commit(block.NumberU64(), config.IsEIP158(block.Number()))
+	root := statedb.IntermediateRoot(config.IsEIP158(block.Number()))
+	statedb.SetExpectedStateRoot(root)
+
+	root, _ = statedb.Commit(block.NumberU64(), config.IsEIP158(block.Number()))
 	return triedb, snaps, statedb, root, err
 }
 
@@ -325,7 +329,10 @@ func MakePreState(db ethdb.Database, accounts core.GenesisAlloc, snapshotter boo
 		}
 	}
 	// Commit and re-open to start with a clean state.
-	root, _ := statedb.Commit(0, false)
+	root := statedb.IntermediateRoot(false)
+	statedb.SetExpectedStateRoot(root)
+
+	root, _ = statedb.Commit(0, false)
 
 	var snaps *snapshot.Tree
 	if snapshotter {
