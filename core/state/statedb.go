@@ -71,7 +71,7 @@ type StateDB struct {
 	// It will be updated when the Commit is called.
 	originalRoot common.Hash
 	expectedRoot common.Hash // The state root in the block header
-	stateRoot    common.Hash
+
 	// These maps hold the state changes (including the corresponding
 	// original value) that occurred in this **block**.
 	accounts       map[common.Hash][]byte                    // The mutated accounts in 'slim RLP' encoding
@@ -1193,7 +1193,7 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 		return common.Hash{}, fmt.Errorf("commit aborted due to earlier error: %v", s.dbErr)
 	}
 	// Finalize any pending changes and merge everything into the tries
-	s.stateRoot = s.IntermediateRoot(deleteEmptyObjects)
+	root := s.IntermediateRoot(deleteEmptyObjects)
 
 	// Commit objects to the trie, measuring the elapsed time
 	var (
@@ -1282,15 +1282,15 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 	if s.snap != nil {
 		start := time.Now()
 		// Only update if there's a state transition (skip empty Clique blocks)
-		if parent := s.snap.Root(); parent != s.expectedRoot {
-			if err := s.snaps.Update(s.expectedRoot, parent, s.convertAccountSet(s.stateObjectsDestruct), s.accounts, s.storages); err != nil {
+		if parent := s.snap.Root(); parent != root {
+			if err := s.snaps.Update(root, parent, s.convertAccountSet(s.stateObjectsDestruct), s.accounts, s.storages); err != nil {
 				log.Warn("Failed to update snapshot tree", "from", parent, "to", s.expectedRoot, "err", err)
 			}
 			// Keep 128 diff layers in the memory, persistent layer is 129th.
 			// - head layer is paired with HEAD state
 			// - head-1 layer is paired with HEAD-1 state
 			// - head-127 layer(bottom-most diff layer) is paired with HEAD-127 state
-			if err := s.snaps.Cap(s.expectedRoot, 128); err != nil {
+			if err := s.snaps.Cap(root, 128); err != nil {
 				log.Warn("Failed to cap snapshot tree", "root", s.expectedRoot, "layers", 128, "err", err)
 			}
 		}
@@ -1300,7 +1300,6 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 		s.snap = nil
 	}
 
-	root := s.stateRoot
 	if root == (common.Hash{}) {
 		root = types.EmptyRootHash
 	}
@@ -1427,6 +1426,10 @@ func (s *StateDB) convertAccountSet(set map[common.Address]*types.StateAccount) 
 
 func (s *StateDB) NoTrie() bool {
 	return s.noTrie
+}
+
+func (s *StateDB) GetSnap() snapshot.Snapshot {
+	return s.snap
 }
 
 // Mark that the block is processed by diff layer
