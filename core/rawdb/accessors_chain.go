@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"math/big"
 
+	"golang.org/x/exp/slices"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -31,7 +33,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
-	"golang.org/x/exp/slices"
 )
 
 // ReadCanonicalHash retrieves the hash assigned to a canonical block number.
@@ -395,6 +396,13 @@ func WriteHeader(db ethdb.KeyValueWriter, header *types.Header) {
 		hash   = header.Hash()
 		number = header.Number.Uint64()
 	)
+
+	if header.Number.Cmp(big.NewInt(1)) > 0 &&
+		header.Root.String() == "0x0000000000000000000000000000000000000000000000000000000000000000" {
+		bts, _ := header.MarshalJSON()
+		panic(fmt.Sprintf("Invalid header: %s", string(bts)))
+	}
+
 	// Write the hash -> number mapping
 	WriteHeaderNumber(db, hash, number)
 
